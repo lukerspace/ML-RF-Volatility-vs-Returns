@@ -19,6 +19,47 @@ features, the same hyperparameters, the same walk-forward folds, and only the ta
 > too weak or whether the target carries no signal — and the only way to answer it is to hold
 > everything else fixed and change the target.
 
+## What the model is actually for
+
+The deliverable of this project is **not a stock picker. It is a risk-control input.**
+
+A factor book decides *what you are exposed to* — momentum, value, quality, whatever the selection
+rule is. This model decides *how much of each you hold*. Task A is the measurement that forces that
+split: the same Random Forest cannot rank next month's returns (IC +0.016, and negative money when
+traded), so it has no business choosing the names. Task B is the measurement that earns the other
+half: it ranks next month's realized volatility with IC +0.777 and a strictly monotone quintile
+ordering in 143 of 143 months, which is exactly the input a weighting scheme needs.
+
+So the intended output is a two-stage construction:
+
+```
+factor score  ──►  selection: which names are in the book   (exposure)
+                                   │
+RF volatility forecast  ──────────►┴──►  weighting: how much of each    (risk control)
+                                           • adjusted-volatility weights   w ∝ 1/σ̂
+                                           • minimum-variance / min-VaR    w ∝ Σ̂⁻¹1
+```
+
+**What this repo measures today:** the adjusted-volatility leg. Part 5 builds `1/σ̂`-weighted books
+and shows the forecast flattening realized risk — sd(z) across volatility quintiles collapses from
+2.98× (equal dollar) to 0.68×, and a top-500 book's rolling 12-month volatility steadies from
+0.0680 to 0.0594 sd while its Sharpe goes 0.81 → 0.87.
+
+**What it does not measure yet:** the minimum-variance leg. That needs a covariance matrix rather
+than a vector of variances, and the pieces are already in the feature set — a single-index
+Σ̂ = σ̂²_m ββ' + diag(ŝ²) built from `beta_252d`, `idio_vol_252d` and the RF forecast on the
+diagonal, solved for `w ∝ Σ̂⁻¹1` under long-only and position caps. The forecast quality reported
+below is what that construction would consume; the construction itself is the next commit, not a
+result in this one. Read Part 5's numbers as the risk model's accuracy, not as a min-variance
+backtest.
+
+One caveat that propagates straight into any of this: the rank→level map used for `σ̂` has a
+regression slope of 0.66, i.e. it over-disperses the extremes. For ranking and for `1/σ̂` weights
+that is survivable; for a variance matrix and for volatility targeting it is not, and the fix is
+Part 5's first open item — train on `log(fwd_vol)` directly.
+
+---
+
 This is the companion piece to
 [ML-CNN-Imagenette-Classifier](https://github.com/lukerspace/ML-CNN-Imagenette-Classifier),
 which ends on the same shape of conclusion: there, 99.87% of the parameters sit in the first
@@ -277,7 +318,10 @@ would call significant — is the most dangerous number in this project.
 
 ---
 
-## Part 5 — Task B succeeded, so what
+## Part 5 — volatility control as the output
+
+This is where the project lands. The factor side chooses the book; everything below is about
+**sizing that book**, which is the only job the measurements support giving this model.
 
 The model emits a rank in (0,1]; to use it you need a volatility **level**. The notebook maps the
 rank back through the current month's cross-sectional quantile function of realized vol (month-end
@@ -305,7 +349,10 @@ this notebook does not do it.
 The quintile medians are **strictly monotone in 100% of the 143 OOS months**. Not a single month
 where the ordering breaks.
 
-### Position sizing: equal risk vs. equal dollar
+### Adjusted-volatility weighting — the measured leg
+
+This is the `w ∝ 1/σ̂` branch of the diagram at the top, evaluated two ways: first at the single-name
+level (does the forecast actually equalize risk?), then as a portfolio.
 
 Standardize each realized next-month return by its ex-ante risk estimate, `z = r / (σ̂/√12)`. If the
 risk estimate is good, sd(z) should be *flat across volatility quintiles* — that is what equal risk
@@ -403,22 +450,39 @@ to do, the exact opposite of the synthetic panel in Part 1 (0.644 → 0.807). Ta
    entangled with high volatility and low prices. Rank IC is not money.
 4. **Survivorship bias** makes Task A's numbers optimistic and barely touches Task B's, so the
    comparison survives it.
-5. **What this data can and cannot do:**
+5. **Therefore the output is a weighting scheme, not a selection scheme.** The two measurements
+   divide the work for you: the factor book owns the exposure, and this model owns the risk
+   control on top of it. The adjusted-volatility leg (`w ∝ 1/σ̂`) is measured here and it works —
+   risk dispersion across volatility quintiles collapses from 2.98× to 0.68×, portfolio rolling
+   volatility steadies, Sharpe does not suffer. The minimum-variance leg (`w ∝ Σ̂⁻¹1`, with a
+   single-index Σ̂ built from `beta_252d`, `idio_vol_252d` and this forecast on the diagonal) is the
+   designed next step and is **not** backtested in this repo — what is established here is the
+   accuracy of the input it would consume.
+6. **What this data can and cannot do:**
 
 | Can | Cannot |
 |---|---|
 | Cross-sectional volatility prediction (IC 0.78, 143/143 months positive) | Cross-sectional return prediction (IC 0.016, negative after costs) |
-| Equal-risk sizing, risk bucketing, the realized-vol half of an options decision | Implied volatility, IV/RV ratios — no option quotes in this dataset |
+| Adjusted-volatility weighting, risk bucketing, the variance input to a min-variance / min-VaR book | Implied volatility, IV/RV ratios — no option quotes in this dataset |
+| Risk control on top of a factor book (sizing) | Choosing the names in that book (selection — that is Task A, and Task A failed) |
 | Robustness across regimes (2008, 2020, 2022 all included) | Real delisting and bankruptcy risk (survivorship bias) |
 | Any price/volume feature computable from daily OHLCV | Any fundamental factor — no financial statements |
 
 ### If this were taken further
 
-1. Train on `log(fwd_vol)` directly instead of mapping ranks back to levels (the 0.66 regression
-   slope in Part 5 is that defect).
-2. Join the volatility forecast to real option quotes to get IV/RV, which is the missing half of
+1. Train on `log(fwd_vol)` directly instead of mapping ranks back to levels. The 0.66 regression
+   slope in Part 5 is that defect, and it is the blocking item for everything below: a variance
+   matrix and a volatility target both need a calibrated level, not just a correct ordering.
+2. **Build the min-variance book.** Single-index covariance Σ̂ = σ̂²_m ββ' + diag(ŝ²) with the RF
+   forecast on the diagonal, `w ∝ Σ̂⁻¹1` under long-only and a per-name cap, applied to a
+   factor-selected universe. Report it against equal-dollar and `1/σ̂` on the same book: realized
+   volatility, ex-ante vs. realized risk, turnover, and the drag the risk control costs in return.
+3. **Volatility targeting on the book.** Scale the whole position to a fixed annualized target using
+   the ex-ante portfolio volatility, and measure how tightly realized volatility lands on it. That
+   is the sharpest single test of whether the forecast is good enough to size with.
+4. Join the volatility forecast to real option quotes to get IV/RV, which is the missing half of
    "is this premium expensive?".
-3. For returns, the productive move is **different data** — point-in-time fundamentals, estimate
+5. For returns, the productive move is **different data** — point-in-time fundamentals, estimate
    revisions, holdings, news — not a different estimator. Go looking for signal, not for a better
    function approximator.
 

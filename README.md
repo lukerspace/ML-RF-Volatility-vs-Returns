@@ -40,7 +40,7 @@ code and its history are still in this repo's git log (`git log -- desision_mode
 
 | Metric | Task A: next-month return | Task B: next-month volatility |
 |---|---:|---:|
-| Pooled OOS R² (143 months, 289,030 stock-months) | −0.0002 | **+0.6143** |
+| Pooled OOS R² (143 months; the 12 per-fold test counts below sum to 289,030 stock-months) | −0.0002 | **+0.6143** |
 | Mean monthly cross-sectional Spearman IC | +0.0158 | **+0.7772** |
 | IC t-stat | +2.0 | +156.9 |
 | IC standard deviation across months | 0.094 | 0.059 |

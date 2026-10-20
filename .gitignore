@@ -1,0 +1,7 @@
+# 價格資料:305MB,走集中式 loader 讀本機正本,不入版控
+*.parquet
+
+.DS_Store
+__pycache__/
+.ipynb_checkpoints/
+.venv/
